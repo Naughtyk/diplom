@@ -152,3 +152,5 @@ fbank_feat = logfbank(sig, rate)
 
 print(mfcc_feat.shape)
 print(fbank_feat.shape)
+
+# Пока всё
