@@ -1,28 +1,32 @@
 import collections
 import contextlib
-import sys
 import wave
-
-import librosa
-import sklearn
 import webrtcvad
+import numpy as np
+from sklearn import svm
+from python_speech_features import mfcc
+from sklearn.decomposition import PCA
 
 frame_duration_ms = 10
-padding_duration_ms = 100
+padding_duration_ms = 50
 
 def read_wave(path):
     """Reads a .wav file.
     Takes the path, and returns (PCM audio data, sample rate).
     """
     with contextlib.closing(wave.open(path, 'rb')) as wf:
-        num_channels = wf.getnchannels()
-        assert num_channels == 1
-        sample_width = wf.getsampwidth()
-        assert sample_width == 2
-        sample_rate = wf.getframerate()
-        assert sample_rate in (8000, 16000, 32000, 48000)
-        pcm_data = wf.readframes(wf.getnframes())
-        return pcm_data, sample_rate
+        (nchannels, sampwidth, framerate, nframes, comptype, compname) = wf.getparams()
+        assert nchannels == 1
+        assert sampwidth == 2
+        assert framerate in (8000, 16000, 32000, 48000)
+        pcm_data = wf.readframes(nframes)
+        types = {
+            1: np.int8,
+            2: np.int16,
+            4: np.int32
+        }
+        samples = np.frombuffer(pcm_data, dtype = types[sampwidth])
+        return samples, framerate
 
 def frame_generator(frame_duration_ms, audio, sample_rate):
     """Generates audio frames from PCM audio data.
@@ -70,7 +74,6 @@ def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, fram
     for frame in frames:
         is_speech = vad.is_speech(frame.bytes, sample_rate)
 
-        #sys.stdout.write('1' if is_speech else '0')
         if not triggered:
             ring_buffer.append((frame, is_speech))
             num_voiced = len([f for f, speech in ring_buffer if speech])
@@ -79,7 +82,6 @@ def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, fram
             # TRIGGERED state.
             if num_voiced > 0.9 * ring_buffer.maxlen:
                 triggered = True
-                #sys.stdout.write('+(%s)' % (ring_buffer[0][0].timestamp,))
                 # We want to yield all the audio we see from now until
                 # we are NOTTRIGGERED, but we have to start with the
                 # audio that's already in the ring buffer.
@@ -101,9 +103,6 @@ def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, fram
                 yield b''.join([f.bytes for f in voiced_frames])
                 ring_buffer.clear()
                 voiced_frames = []
-    #if triggered:
-        #sys.stdout.write('-(%s)' % (frame.timestamp + frame.duration))
-    #sys.stdout.write('\n')
     # If we have any leftover voiced audio when we run out of input,
     # yield it.
     if voiced_frames:
@@ -116,41 +115,62 @@ class Frame(object):
         self.timestamp = timestamp
         self.duration = duration
 
+def VAD(audio, sample_rate):
+    vad = webrtcvad.Vad(3)
+    frames = frame_generator(frame_duration_ms, audio, sample_rate)
+    frames = list(frames)
+    segments = vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames)
+    audio_after_vad = []
+
+    for segment in segments:
+        audio_after_vad += segment
+    return np.array(list(map(np.int16, audio_after_vad)))
+
+def PCA_(audio_after_mfcc):
+    pca = PCA(n_components=13)
+    pca.fit(audio_after_mfcc.T)
+    '''print(pca.explained_variance_ratio_)
+
+    print("pca.shape: ", pca.components_.shape)'''
+
+    # Количество компонент и доля их участия в объяснении зависимостей
+    sum = 0
+    for idx, explained_variance in enumerate(pca.explained_variance_ratio_):
+        sum += explained_variance
+        # print(idx + 1, sum)
+
+    pca = PCA(n_components=8)  # 8 компонент содержат в себе 96% информации (дисперсии)
+    pca.fit(audio_after_mfcc.T)
+    return pca.components_
+
 audio, sample_rate = read_wave("Voices/Anna/Anna (1).wav")
+audio_after_vad = VAD(audio, sample_rate)
+audio_after_mfcc = mfcc(audio_after_vad, sample_rate)
+audio_after_PCA = PCA_(audio_after_mfcc)
 
-vad = webrtcvad.Vad(3)
-frames = frame_generator(frame_duration_ms, audio, sample_rate)
-frames = list(frames)
+audio2, sample_rate2 = read_wave("Voices/Dima/Dima (1).wav")
+audio_after_vad2 = VAD(audio2, sample_rate2)
+audio_after_mfcc2 = mfcc(audio_after_vad2, sample_rate2)
+audio_after_PCA2 = PCA_(audio_after_mfcc2)
 
-segments = vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames)
-audio_after_vad = []
+audio3, sample_rate3 = read_wave("Voices/Anna/Anna (2).wav")
+audio_after_vad3 = VAD(audio3, sample_rate3)
+audio_after_mfcc3 = mfcc(audio_after_vad3, sample_rate3)
+audio_after_PCA3 = PCA_(audio_after_mfcc3)
 
-for segment in segments:
-    audio_after_vad += segment
+audio4, sample_rate4 = read_wave("Voices/Dima/Dima (2).wav")
+audio_after_vad4 = VAD(audio4, sample_rate4)
+audio_after_mfcc4 = mfcc(audio_after_vad4, sample_rate4)
+audio_after_PCA4 = PCA_(audio_after_mfcc4)
 
-audio_after_vad = list(map(int, audio_after_vad))
+# Данные для обучения
+X_train = np.concatenate((audio_after_PCA.T, audio_after_PCA2.T))
+y_train = np.concatenate((np.ones(audio_after_PCA.T.shape[0]),
+                          np.zeros(audio_after_PCA2.T.shape[0])))
+clf = svm.SVC()
+clf.fit(X_train, y_train)
 
-#audio, sampling_freq = librosa.load("Voices/Anna/Anna (1).wav")
+X_test = audio_after_PCA4.T
+y_test = np.ones(audio_after_PCA4.T.shape[0])
 
-#hop_length = 512
-#n_mfcc = 40
-#n_fft = 1024
-#features = librosa.feature.mfcc(audio, sample_rate, n_mfcc, n_fft, hop_length)
-#features = sklearn.preprocessing.scale(features)
-
-from python_speech_features import mfcc
-from python_speech_features import logfbank
-import scipy.io.wavfile as wav
-
-(rate, sig) = wav.read("Voices/Anna/Anna (1).wav")
-print(sig[0:5])
-print(type(sig))
-print(len(sig))
-
-mfcc_feat = mfcc(sig, rate)
-fbank_feat = logfbank(sig, rate)
-
-print(mfcc_feat.shape)
-print(fbank_feat.shape)
-
-# Пока всё
+print(clf.score(X_test, y_test))
