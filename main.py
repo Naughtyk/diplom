@@ -44,6 +44,7 @@ def frame_generator(frame_duration_ms, audio, sample_rate):
         offset += n
 
 def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames):
+    list_out = []
     """Filters out non-voiced audio frames.
     Given a webrtcvad.Vad and a source of audio frames, yields only
     the voiced audio.
@@ -100,13 +101,16 @@ def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, fram
             if num_unvoiced > 0.9 * ring_buffer.maxlen:
                 #sys.stdout.write('-(%s)' % (frame.timestamp + frame.duration))
                 triggered = False
-                yield b''.join([f.bytes for f in voiced_frames])
+                #yield [f.bytes for f in voiced_frames]
+                list_out += (f.bytes for f in voiced_frames)
                 ring_buffer.clear()
                 voiced_frames = []
     # If we have any leftover voiced audio when we run out of input,
     # yield it.
     if voiced_frames:
-        yield b''.join([f.bytes for f in voiced_frames])
+        #yield [f.bytes for f in voiced_frames]
+        list_out += (f.bytes for f in voiced_frames)
+    return list_out
 
 class Frame(object):
     """Represents a "frame" of audio data."""
@@ -119,12 +123,9 @@ def VAD(audio, sample_rate):
     vad = webrtcvad.Vad(3)
     frames = frame_generator(frame_duration_ms, audio, sample_rate)
     frames = list(frames)
-    segments = vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, frames)
-    audio_after_vad = []
-
-    for segment in segments:
-        audio_after_vad += segment
-    return np.array(list(map(np.int16, audio_after_vad)))
+    audio_after_vad = vad_collector(sample_rate, frame_duration_ms,
+                                    padding_duration_ms, vad, frames)
+    return np.array(audio_after_vad).flatten()
 
 def PCA_(audio_after_mfcc):
     pca = PCA(n_components=13)
@@ -145,6 +146,7 @@ def PCA_(audio_after_mfcc):
 
 audio, sample_rate = read_wave("Voices/Anna/Anna (1).wav")
 audio_after_vad = VAD(audio, sample_rate)
+print(audio_after_vad.shape)
 audio_after_mfcc = mfcc(audio_after_vad, sample_rate)
 audio_after_PCA = PCA_(audio_after_mfcc)
 
