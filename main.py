@@ -99,16 +99,13 @@ def vad_collector(sample_rate, frame_duration_ms, padding_duration_ms, vad, fram
             # unvoiced, then enter NOTTRIGGERED and yield whatever
             # audio we've collected.
             if num_unvoiced > 0.9 * ring_buffer.maxlen:
-                #sys.stdout.write('-(%s)' % (frame.timestamp + frame.duration))
                 triggered = False
-                #yield [f.bytes for f in voiced_frames]
                 list_out += (f.bytes for f in voiced_frames)
                 ring_buffer.clear()
                 voiced_frames = []
     # If we have any leftover voiced audio when we run out of input,
     # yield it.
     if voiced_frames:
-        #yield [f.bytes for f in voiced_frames]
         list_out += (f.bytes for f in voiced_frames)
     return list_out
 
@@ -146,7 +143,6 @@ def PCA_(audio_after_mfcc):
 
 audio, sample_rate = read_wave("Voices/Anna/Anna (1).wav")
 audio_after_vad = VAD(audio, sample_rate)
-print(audio_after_vad.shape)
 audio_after_mfcc = mfcc(audio_after_vad, sample_rate)
 audio_after_PCA = PCA_(audio_after_mfcc)
 
