@@ -6,9 +6,12 @@ import numpy as np
 from sklearn import svm
 from python_speech_features import mfcc
 from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
 
 frame_duration_ms = 10
 padding_duration_ms = 50
+SNR = 10
+VAD_parametr = 3
 
 def read_wave(path):
     """Reads a .wav file.
@@ -117,7 +120,7 @@ class Frame(object):
         self.duration = duration
 
 def VAD(audio, sample_rate):
-    vad = webrtcvad.Vad(3)
+    vad = webrtcvad.Vad(VAD_parametr)
     frames = frame_generator(frame_duration_ms, audio, sample_rate)
     frames = list(frames)
     audio_after_vad = vad_collector(sample_rate, frame_duration_ms,
@@ -125,7 +128,8 @@ def VAD(audio, sample_rate):
     return np.array(audio_after_vad).flatten()
 
 def PCA_(audio_after_mfcc):
-    pca = PCA(n_components=13)
+
+    pca = PCA(n_components = 13)
     pca.fit(audio_after_mfcc.T)
     '''print(pca.explained_variance_ratio_)
 
@@ -135,28 +139,54 @@ def PCA_(audio_after_mfcc):
     sum = 0
     for idx, explained_variance in enumerate(pca.explained_variance_ratio_):
         sum += explained_variance
-        # print(idx + 1, sum)
+        #print(idx + 1, sum)
 
-    pca = PCA(n_components=8)  # 8 компонент содержат в себе 96% информации (дисперсии)
+    pca = PCA(n_components = 8) # 8 компонент содержат в себе 96% информации (дисперсии)
     pca.fit(audio_after_mfcc.T)
     return pca.components_
 
+def Noise(SNR, audio):
+    audio2 = audio ** 2
+    target_snr_db = SNR
+    # Calculate signal power and convert to dB
+    sig_avg_watts = np.mean(audio2)
+    sig_avg_db = 10 * np.log10(sig_avg_watts)
+    noise_avg_db = sig_avg_db - target_snr_db
+    noise_avg_watts = 10 ** (noise_avg_db / 10)
+    # Generate an sample of white noise
+    mean_noise = 0
+    noise_volts = np.random.normal(mean_noise, noise_avg_watts, len(audio2))
+    # Noise up the original signal
+    return audio + noise_volts
+
+def plot(audio, sample_rate, i):
+    t = np.linspace(0, len(audio)/sample_rate, num = len(audio))
+    plt.subplot(3, 1, i)
+    plt.plot(t, audio)
+    plt.title('Signal')
+    plt.ylabel('Voltage (mV)')
+    plt.xlabel('Time (s)')
+
 audio, sample_rate = read_wave("Voices/Anna/Anna (1).wav")
+audio = Noise(SNR, audio)
 audio_after_vad = VAD(audio, sample_rate)
 audio_after_mfcc = mfcc(audio_after_vad, sample_rate)
 audio_after_PCA = PCA_(audio_after_mfcc)
 
 audio2, sample_rate2 = read_wave("Voices/Dima/Dima (1).wav")
+audio2 = Noise(SNR, audio)
 audio_after_vad2 = VAD(audio2, sample_rate2)
 audio_after_mfcc2 = mfcc(audio_after_vad2, sample_rate2)
 audio_after_PCA2 = PCA_(audio_after_mfcc2)
 
 audio3, sample_rate3 = read_wave("Voices/Anna/Anna (2).wav")
+audio3 = Noise(SNR, audio)
 audio_after_vad3 = VAD(audio3, sample_rate3)
 audio_after_mfcc3 = mfcc(audio_after_vad3, sample_rate3)
 audio_after_PCA3 = PCA_(audio_after_mfcc3)
 
 audio4, sample_rate4 = read_wave("Voices/Dima/Dima (2).wav")
+audio4 = Noise(SNR, audio)
 audio_after_vad4 = VAD(audio4, sample_rate4)
 audio_after_mfcc4 = mfcc(audio_after_vad4, sample_rate4)
 audio_after_PCA4 = PCA_(audio_after_mfcc4)
@@ -172,3 +202,4 @@ X_test = audio_after_PCA4.T
 y_test = np.ones(audio_after_PCA4.T.shape[0])
 
 print(clf.score(X_test, y_test))
+plt.show()
