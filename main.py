@@ -7,10 +7,15 @@ from sklearn import svm
 from python_speech_features import mfcc
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
+import math
+from scipy import fft
+from math import log10
+from scipy.stats.mstats import gmean
+import scipy.signal
 
 frame_duration_ms = 10
 padding_duration_ms = 50
-SNR = 10
+SNR = 100
 VAD_parametr = 3
 
 def read_wave(path):
@@ -127,6 +132,170 @@ def VAD(audio, sample_rate):
                                     padding_duration_ms, vad, frames)
     return np.array(audio_after_vad).flatten()
 
+def alternative_VAD(audio, Fs):
+    """
+    Функция:
+    VAD
+
+    Описание:
+    Удаление тишины из речевого сигнала
+
+    Параметры:
+    yMono - речевой сигнал в дискретном виде
+    Fs - частота дискретизации
+    EnergyPrimTreshhold - порог для энергии
+    FPrimThresh - порог для преобладающей частоты в спектре кадра
+    SFPrimThresh - порог для меры спектральной плоскостности
+    Frame_size - размер кадра
+
+    Возвращаемое значение:
+    Речевой сигнал без тишины
+
+    Внешние эффекты:
+    Нет
+    """
+
+    # Параметры VAD:
+    EnergyPrimTreshhold = 40  # Порог для Энергии
+    FPrimThresh = 185  # Порог для частоты F
+    SFPrimThresh = 5  # Порог для SFM
+    Frame_size = 10  # Размер кадра в миллисекундах
+
+    SamplePerFrame = int((Frame_size * 0.001) * Fs)  # Количество отсчетов в кадре
+    NumOfFrame = int(math.ceil(len(audio) / SamplePerFrame))  # Число кадров
+
+    audio_ext = np.pad(audio, (0, NumOfFrame * SamplePerFrame - len(audio)))  # добавляем в конец файла нули, чтобы разбить на кадры
+    audio_matrix = audio_ext.reshape(SamplePerFrame, NumOfFrame)  # разбитый на кадры аудиофрейм
+
+    def ShortTimeEnergy(FrameArray, NumOfFrame, SamplePerFrame):
+        """
+            Функция:
+            ShortTimeEnergy
+
+            Описание:
+            Вычисление кратковременной энергии в кадре
+
+            Параметры:
+            FrameArray - массив кадров
+            NumOfFrame - количество кадров
+            SamplePerFrame - количество отсчётов на кадр
+
+            Возвращаемое значение:
+            Матрица, состоящая из кадров
+
+            Внешние эффекты:
+            Нет
+         """
+        ShortTimeEnergy1 = np.square(FrameArray)
+        """
+        while IndexOfFrame - 1 < NumOfFrame:
+            m = 1
+            n = FrameArray(1:SamplePerFrame, IndexOfFrame)
+            while m - 1 < SamplePerFrame:
+                ShortTimeEnergy1[m, IndexOfFrame] = sum((FrameArray(m, IndexOfFrame). * (0.5 - 0.46). * cos((2. * pi. * (m - n)))). ^ 2)
+                m += 1
+            IndexOfFrame += 1
+        """
+        return np.mean(ShortTimeEnergy1, axis=0)
+
+    def ste(signal, win):
+        """Compute short-time energy."""
+        audio_matrix_energy = np.array([])
+        for i in range(len(signal[0])):
+            audio_matrix_energy = np.append(audio_matrix_energy,
+                                                     abs(np.mean(scipy.signal.convolve(np.array([row[i] for row in signal]),
+                                                                           win, mode="same"))))
+
+        return audio_matrix_energy
+
+    # Расчёт энергии фреймов
+    audio_matrix_energy = ste(audio_matrix, scipy.signal.get_window("hamming", SamplePerFrame))
+
+    # Расчёт энергии фреймов
+    #audio_matrix_energy = ShortTimeEnergy(audio_matrix, NumOfFrame, SamplePerFrame)
+
+    def _fft(FrameArray):
+        massiv_fft = fft.fft(FrameArray)
+        DominFreqCom = np.amax(massiv_fft, axis=0)
+        return massiv_fft, DominFreqCom
+
+    FrameArrayFFT, DominFreqCom = _fft(audio_matrix)
+
+    def SMFunction(FrameArrayFFT, NumOfFrame, SamplePerFrame):
+        SMF = np.array([])
+        for i in range(NumOfFrame):
+            SMF = np.append(SMF, 10 * log10((np.mean(abs(FrameArrayFFT[:, i]))) / (gmean(abs(FrameArrayFFT[:, i])))))
+        return SMF
+
+    SMF = SMFunction(FrameArrayFFT, NumOfFrame, SamplePerFrame)
+
+    Min_E = min(audio_matrix_energy[0:30])
+    Min_F = min(DominFreqCom[0:30])
+    Min_SF = min(SMF[0:30])
+    Tresh_E = EnergyPrimTreshhold * log10(Min_E)
+    Tresh_F = FPrimThresh
+    Tresh_SF = SFPrimThresh
+
+    FrameArrayMark = np.array([])
+    i = 0
+    silence_cnt = 0
+    while i < NumOfFrame:
+        cnt = 0
+        if (audio_matrix_energy[i] - Min_E) >= Tresh_E:
+            cnt += 1
+        if (DominFreqCom[i] - Min_F) >= Tresh_F:
+            cnt += 1
+        if (SMF[i] - Min_SF) >= Tresh_SF:
+            cnt += 1
+        if cnt > 1:
+            FrameArrayMark = np.append(FrameArrayMark, 1)
+        else:
+            silence_cnt += 1
+            Min_E = (silence_cnt * Min_E + audio_matrix_energy[i]) / (silence_cnt + 1)
+            FrameArrayMark = np.append(FrameArrayMark, 0)
+            Tresh_E = EnergyPrimTreshhold * log10(Min_E)
+        i = i + 1
+
+    j = 0
+    k = 0
+    yMonok = np.array([])
+    """
+    while j < NumOfFrame:
+        while k < SamplePerFrame:
+            yMonok = np.append(yMonok, FrameArrayMark[j] * audio_ext[j * SamplePerFrame + k])
+            k += 1
+        k = 0
+        j += 1
+    """
+
+    i = 1
+    cnt = 0
+    while i < NumOfFrame - 1:
+        if FrameArrayMark[i] == FrameArrayMark[i - 1]:
+            cnt += 1
+        elif FrameArrayMark[i] != FrameArrayMark[i - 1]:
+            if FrameArrayMark[i - 1] == 0 and cnt < 10 and FrameArrayMark[i + 1] == 1:
+                FrameArrayMark[i - 1 - cnt: i - 1] = 1
+
+            if FrameArrayMark[i - 1] == 1 and cnt < 5 and FrameArrayMark[i + 1] == 0:
+                FrameArrayMark[i - 1 - cnt: i - 1] = 0
+        cnt = 0
+        i += 1
+
+    j = 0
+    k = 0
+    while j < NumOfFrame:
+        while k < SamplePerFrame:
+            yMonok = np.append(yMonok, FrameArrayMark[j] * audio_ext[j * SamplePerFrame + k])
+            k += 1
+        k = 0
+        j += 1
+
+    yMonok = np.delete(yMonok, np.where(yMonok == 0), axis=0)
+    if np.all(yMonok == 0):
+        yMonok = []
+    return yMonok
+
 def PCA_(audio_after_mfcc):
 
     pca = PCA(n_components = 13)
@@ -172,6 +341,16 @@ audio = Noise(SNR, audio)
 audio_after_vad = VAD(audio, sample_rate)
 audio_after_mfcc = mfcc(audio_after_vad, sample_rate)
 audio_after_PCA = PCA_(audio_after_mfcc)
+
+audio_after_alternative_vad = alternative_VAD(audio, sample_rate)
+
+print(audio.shape, audio_after_vad.shape, audio_after_mfcc.shape, audio_after_PCA.shape)
+print(type(audio), type(audio_after_vad))
+print(audio_after_alternative_vad.shape)
+
+
+plot(audio, sample_rate, 1)
+plot(audio_after_alternative_vad, sample_rate, 2)
 
 audio2, sample_rate2 = read_wave("Voices/Dima/Dima (1).wav")
 audio2 = Noise(SNR, audio)
